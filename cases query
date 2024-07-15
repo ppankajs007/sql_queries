@@ -1,0 +1,77 @@
+    
+    $startDate = date('Y-m-d 00:00:00', strtotime($POST['start_date']));
+		$endDate = date('Y-m-d 23:59:59',strtotime($POST['end_date']));
+		if( $POST['date_range'] == 'today' ){
+			$startDate = date('Y-m-d 00:00:00');
+			$endDate = date('Y-m-d 23:59:59');
+		}elseif($POST['date_range'] == 'yesterday'){
+			$startDate = date('Y-m-d 00:00:00', strtotime('-1 days'));
+			$endDate = date('Y-m-d 23:59:59',strtotime('-1 days'));
+		}
+
+        if( isset($POST['uhid']) && !empty($POST['uhid']) ) {
+            $startDate = date('Y-m-d 00:00:00',strtotime('2023-10-01'));
+        }
+
+        $result = $this->db->select('registration.patient, pwi.patient_id, branch.name as branchName, patient_wallet_package.amount, pw.remaning_amount, pwi.order_id, pwi.before_discount_ammount, pwi.after_discount_amount, (CASE WHEN pwi.transaction = 0 THEN "Debit" WHEN pwi.transaction = 1 THEN "Credit" END ) as transaction, pwi.outstandingAmount, pwi.created_at, pw.pending, users.name as addedBy, remainig_balance as before_current_order, pw.id as pwId, purchaseBranch.name as purchaseBranchName,orders.sell_type, orders.response_id, pw.payment_method, pw.transaction as pwTransaction')
+        ->join('patient_wallet as pw', 'pw.id = pwi.patient_wallet_id')
+        ->join('patient_wallet_package', 'patient_wallet_package.id = pw.package_id')
+        ->join('orders', 'orders.id = pwi.order_id', 'inner')
+        ->join('users', 'users.id = pwi.user_id')
+        ->join('branch', 'branch.id = users.branch_id')
+        ->join('users as purchasePack', 'purchasePack.id = pw.user_id')
+        ->join('branch as purchaseBranch', 'purchaseBranch.id = purchasePack.branch_id')
+        
+        ->join('registration', 'registration.uhid = pw.patient_id')
+        ->join('(SELECT patient_wallet_invoices.patient_wallet_id,
+                    (pwp.amount - pw.pending) - COALESCE(
+                        SUM(
+                            CASE 
+                                WHEN patient_wallet_invoices.transaction = 0 THEN (after_discount_amount) 
+                                WHEN patient_wallet_invoices.transaction = 1 THEN -(after_discount_amount) ELSE 0 END), 0) as remainig_balance 
+                                FROM patient_wallet_invoices 
+                                LEFT JOIN patient_wallet as pw ON pw.id = patient_wallet_invoices.patient_wallet_id LEFT JOIN patient_wallet_package as pwp ON pwp.id = pw.package_id WHERE (patient_wallet_invoices.created_at < "'.$startDate.'") 
+                                GROUP BY patient_wallet_id ORDER BY patient_wallet_invoices.created_at ASC) as balanceTable', 'balanceTable.patient_wallet_id = pwi.patient_wallet_id', 'left');
+
+        if( !in_array( $POST['branch_id'], [0] ) ){
+            $result = $result->where('users.branch_id', $POST['branch_id']);
+        }
+        if( isset($POST['uhid']) && !empty($POST['uhid']) ) {
+            $result = $result->where('pwi.patient_id', $POST['uhid']);
+        }else{
+            $result = $result->group_start()
+                    ->where('pwi.created_at >=', $startDate)
+                    ->where('pwi.created_at <=', $endDate)
+                    ->group_end();
+        }
+                
+        $result = $result->order_by('pwi.created_at', 'ASC')
+            ->get('patient_wallet_invoices as pwi')->result_array();
+
+        $db_error = $this->db->error();
+        if (!empty($db_error['code'])){
+            echo 'Database error! Error Code [' . $db_error['code'] . '] Error: ' . $db_error['message'];
+            exit;
+        }
+
+        return $result;
+
+        // SELECT `registration`.`patient`, `pwi`.`patient_id`, `branch`.`name` as `branchName`, `patient_wallet_package`.`amount`, `pw`.`remaning_amount`, `pwi`.`order_id`, `pwi`.`before_discount_ammount`, `pwi`.`after_discount_amount`, `pwi`.`transaction`, `pwi`.`outstandingAmount`, `pwi`.`created_at`, `pw`.`pending`, `users`.`name` as `addedBy`, `remainig_balance` 
+        // FROM `patient_wallet_invoices` as `pwi` 
+        // INNER JOIN `patient_wallet` as `pw` ON `pw`.`id` = `pwi`.`patient_wallet_id` 
+        // INNER JOIN `patient_wallet_package` ON `patient_wallet_package`.`id` = `pw`.`package_id` 
+        // INNER JOIN `users` ON `users`.`id` = `pw`.`user_id` 
+        // INNER JOIN `branch` ON `branch`.`id` = `users`.`branch_id` 
+        // INNER JOIN `registration` ON `registration`.`uhid` = `pw`.`patient_id` 
+        // LEFT JOIN 
+        //     (SELECT patient_wallet_invoices.patient_id, pwp.amount - COALESCE( SUM( CASE WHEN patient_wallet_invoices.transaction = 0 THEN (after_discount_amount ) 
+        //     WHEN patient_wallet_invoices.transaction = 1 THEN -(after_discount_amount ) ELSE 0 END ), 0 ) as remainig_balance 
+        //     FROM patient_wallet_invoices 
+        //     LEFT JOIN patient_wallet as pw ON pw.id = patient_wallet_invoices.patient_wallet_id 
+        //     LEFT JOIN patient_wallet_package as pwp ON pwp.id = pw.package_id 
+        //     WHERE ( patient_wallet_invoices.created_at <= '2023-11-01 00:00:00' ) 
+        //     GROUP BY patient_wallet_id
+        //     ORDER BY patient_wallet_invoices.created_at ASC) as balanceTable 
+        //     ON `balanceTable`.`patient_id` = `pwi`.`patient_id` 
+        // WHERE ( `pwi`.`created_at` >= '2023-11-01 00:00:00' AND `pwi`.`created_at` <= '2023-11-05 23:59:59' ) AND pwi.patient_id = 'JSUD7732023' ORDER BY `pwi`.`created_at` ASC
+                    
